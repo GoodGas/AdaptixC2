@@ -1,0 +1,40 @@
+name: Sync with Upstream (Advanced)
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 0 * * 0'  # 每周日午夜自动运行（可选）
+
+jobs:
+  sync:
+    name: Sync fork with upstream
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout target repo
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Sync upstream changes
+      id: sync
+      uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+      with:
+        upstream_sync_repo: Adaptix-Framework/AdaptixC2
+        upstream_sync_branch: main
+        target_sync_branch: main
+        target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+        test_mode: false
+    
+    - name: New commits detected
+      if: steps.sync.outputs.has_new_commits == 'true'
+      run: |
+        echo "### 🎉 检测到新的提交" >> $GITHUB_STEP_SUMMARY
+        echo "已从上游仓库同步了新的更新" >> $GITHUB_STEP_SUMMARY
+    
+    - name: No new commits
+      if: steps.sync.outputs.has_new_commits == 'false'
+      run: |
+        echo "### ℹ️ 没有新的更新" >> $GITHUB_STEP_SUMMARY
+        echo "您的仓库已经是最新的" >> $GITHUB_STEP_SUMMARY
