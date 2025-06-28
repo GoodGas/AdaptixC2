@@ -183,25 +183,42 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install Qt
+    - name: Install Qt for host (x64)
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.6.*'
+        modules: 'qtwebsockets'
+        arch: 'win64_msvc2019_64'
+        cache: true
+        set-env: false
+        aqtversion: '==3.1.*'
+        
+    - name: Save host Qt path
+      shell: pwsh
+      run: |
+        $hostQtPath = "${{ runner.workspace }}\Qt\6.6.3\msvc2019_64"
+        echo "QT_HOST_PATH=$hostQtPath" >> $env:GITHUB_ENV
+    
+    - name: Install Qt for target (ARM64)
       uses: jurplel/install-qt-action@v3
       with:
         version: '6.6.*'
         modules: 'qtwebsockets'
         arch: 'win64_msvc2019_arm64'
         cache: true
+        aqtversion: '==3.1.*'
     
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
       with:
         arch: arm64
     
-    - name: Configure CMake
+    - name: Configure CMake with cross-compilation
       run: |
         cd AdaptixClient
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -A ARM64
+        cmake .. -DCMAKE_BUILD_TYPE=Release -A ARM64 -DQT_HOST_PATH="${{ env.QT_HOST_PATH }}"
     
     - name: Build
       working-directory: AdaptixClient/build
@@ -220,12 +237,12 @@ jobs:
           Write-Host "Found executable: $($exeFile.FullName)"
           Copy-Item $exeFile.FullName -Destination "dist-windows\"
           
-          # 注意：ARM64 版本的 windeployqt 可能需要特殊处理
-          $qtBin = "$env:Qt6_DIR\bin"
-          if (Test-Path "$qtBin\windeployqt.exe") {
-            & "$qtBin\windeployqt.exe" "dist-windows\$($exeFile.Name)"
+          # 使用主机版本的 windeployqt
+          $hostQtBin = "${{ env.QT_HOST_PATH }}\bin"
+          if (Test-Path "$hostQtBin\windeployqt.exe") {
+            & "$hostQtBin\windeployqt.exe" --dir "dist-windows" --qmldir "AdaptixClient" "dist-windows\$($exeFile.Name)"
           } else {
-            Write-Host "Warning: windeployqt.exe not found for ARM64, copying Qt libraries manually may be required"
+            Write-Host "Warning: windeployqt.exe not found"
           }
         }
     
@@ -247,6 +264,7 @@ jobs:
     ]
     runs-on: ubuntu-latest
     if: success()
+    continues-on-error: true  # 允许部分平台失败
     
     steps:
     - name: Download all artifacts
