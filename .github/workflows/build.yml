@@ -175,83 +175,6 @@ jobs:
         name: client-windows-amd64
         path: dist-windows/*
 
-  build-client-windows-arm64:
-    name: Build Client for Windows (ARM64)
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Install Qt for host (x64)
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: '6.6.*'
-        modules: 'qtwebsockets'
-        arch: 'win64_msvc2019_64'
-        cache: true
-        set-env: false
-        aqtversion: '==3.1.*'
-        
-    - name: Save host Qt path
-      shell: pwsh
-      run: |
-        $hostQtPath = "${{ runner.workspace }}\Qt\6.6.3\msvc2019_64"
-        echo "QT_HOST_PATH=$hostQtPath" >> $env:GITHUB_ENV
-    
-    - name: Install Qt for target (ARM64)
-      uses: jurplel/install-qt-action@v3
-      with:
-        version: '6.6.*'
-        modules: 'qtwebsockets'
-        arch: 'win64_msvc2019_arm64'
-        cache: true
-        aqtversion: '==3.1.*'
-    
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: arm64
-    
-    - name: Configure CMake with cross-compilation
-      run: |
-        cd AdaptixClient
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -A ARM64 -DQT_HOST_PATH="${{ env.QT_HOST_PATH }}"
-    
-    - name: Build
-      working-directory: AdaptixClient/build
-      run: cmake --build . --config Release
-    
-    - name: Package with dependencies
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path "dist-windows"
-        
-        $exeFile = Get-ChildItem -Path "AdaptixClient\build" -Filter "*.exe" -Recurse | 
-                   Where-Object { $_.Name -like "*AdaptixClient*" -or $_.Name -like "*Adaptix*" } | 
-                   Select-Object -First 1
-        
-        if ($exeFile) {
-          Write-Host "Found executable: $($exeFile.FullName)"
-          Copy-Item $exeFile.FullName -Destination "dist-windows\"
-          
-          # 使用主机版本的 windeployqt
-          $hostQtBin = "${{ env.QT_HOST_PATH }}\bin"
-          if (Test-Path "$hostQtBin\windeployqt.exe") {
-            & "$hostQtBin\windeployqt.exe" --dir "dist-windows" --qmldir "AdaptixClient" "dist-windows\$($exeFile.Name)"
-          } else {
-            Write-Host "Warning: windeployqt.exe not found"
-          }
-        }
-    
-    - name: Upload client artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: client-windows-arm64
-        path: dist-windows/*
-
   create-release:
     name: Create Release
     needs: [
@@ -259,12 +182,11 @@ jobs:
       build-client-linux, 
       build-client-macos-amd64, 
       build-client-macos-arm64, 
-      build-client-windows-amd64, 
-      build-client-windows-arm64
+      build-client-windows-amd64
     ]
     runs-on: ubuntu-latest
     if: success()
-    continues-on-error: true  # 允许部分平台失败
+    continue-on-error: true  # 修正拼写错误：continues-on-error -> continue-on-error
     
     steps:
     - name: Download all artifacts
