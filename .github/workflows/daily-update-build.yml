@@ -1,4 +1,4 @@
-name: Daily Update and Build (Advanced)
+name: Daily Update and Build (Debug Version)
 
 on:
   schedule:
@@ -23,6 +23,8 @@ jobs:
       has_updates: ${{ steps.check_updates.outputs.has_updates }}
       commit_message: ${{ steps.check_updates.outputs.commit_message }}
       commits_behind: ${{ steps.check_updates.outputs.commits_behind }}
+      local_commit: ${{ steps.check_updates.outputs.local_commit }}
+      upstream_commit: ${{ steps.check_updates.outputs.upstream_commit }}
     
     steps:
     - name: Checkout repository
@@ -47,14 +49,29 @@ jobs:
         LOCAL_COMMIT=$(git rev-parse HEAD)
         UPSTREAM_COMMIT=$(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
         
+        # 保存 commit 信息
+        echo "local_commit=$LOCAL_COMMIT" >> $GITHUB_OUTPUT
+        echo "upstream_commit=$UPSTREAM_COMMIT" >> $GITHUB_OUTPUT
+        
         # 计算落后的提交数
         COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/${{ env.UPSTREAM_BRANCH }})
         
+        echo "=== 调试信息 ===" 
         echo "Local commit: $LOCAL_COMMIT"
         echo "Upstream commit: $UPSTREAM_COMMIT"
         echo "Commits behind: $COMMITS_BEHIND"
+        echo "Force build: ${{ github.event.inputs.force_build }}"
         
-        if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
+        # 显示最近的提交历史
+        echo ""
+        echo "=== 本地最近5个提交 ==="
+        git log --oneline -5
+        
+        echo ""
+        echo "=== 上游最近5个提交 ==="
+        git log upstream/${{ env.UPSTREAM_BRANCH }} --oneline -5
+        
+        if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ]; then
           echo "has_updates=true" >> $GITHUB_OUTPUT
           echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
           
@@ -64,25 +81,52 @@ jobs:
           
           echo "### ✅ 检测到上游更新" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **本地 commit**: $LOCAL_COMMIT" >> $GITHUB_STEP_SUMMARY
+          echo "- **上游 commit**: $UPSTREAM_COMMIT" >> $GITHUB_STEP_SUMMARY
           echo "- **落后提交数**: $COMMITS_BEHIND" >> $GITHUB_STEP_SUMMARY
           echo "- **最新提交**: $COMMIT_MSG" >> $GITHUB_STEP_SUMMARY
+          
+          # 显示具体的差异
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 提交差异" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          git log --oneline HEAD..upstream/${{ env.UPSTREAM_BRANCH }} >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
         else
           echo "has_updates=false" >> $GITHUB_OUTPUT
           echo "commits_behind=0" >> $GITHUB_OUTPUT
           echo "### ℹ️ 没有检测到新的更新" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **当前 commit**: $LOCAL_COMMIT" >> $GITHUB_STEP_SUMMARY
+          echo "- **您的仓库已是最新版本**" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # 如果是强制构建
+        if [ "${{ github.event.inputs.force_build }}" == "true" ]; then
+          echo "has_updates=true" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ⚡ 强制构建模式" >> $GITHUB_STEP_SUMMARY
+          echo "即使没有更新也会执行构建" >> $GITHUB_STEP_SUMMARY
         fi
     
     - name: Sync with upstream
-      if: steps.check_updates.outputs.has_updates == 'true' && github.event.inputs.force_build != 'true'
+      if: steps.check_updates.outputs.has_updates == 'true' && steps.check_updates.outputs.local_commit != steps.check_updates.outputs.upstream_commit
       run: |
+        echo "=== 开始同步上游更改 ==="
         # 合并上游更改
-        git merge upstream/${{ env.UPSTREAM_BRANCH }} --no-edit
-        git push origin ${{ env.UPSTREAM_BRANCH }}
+        if git merge upstream/${{ env.UPSTREAM_BRANCH }} --no-edit; then
+          echo "✅ 成功合并上游更改"
+          git push origin ${{ github.ref_name }}
+        else
+          echo "❌ 合并时出现冲突"
+          git status
+          exit 1
+        fi
 
   build-all:
     name: Build all platforms
     needs: check-and-sync
-    if: needs.check-and-sync.outputs.has_updates == 'true' || github.event.inputs.force_build == 'true'
+    if: needs.check-and-sync.outputs.has_updates == 'true'
     uses: ./.github/workflows/build.yml
     secrets: inherit
 
@@ -98,11 +142,14 @@ jobs:
         echo "# 📊 每日自动更新和构建报告" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "**执行时间**: $(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+        echo "**触发方式**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ "${{ needs.check-and-sync.outputs.has_updates }}" == "true" ]; then
           echo "## ✅ 更新状态" >> $GITHUB_STEP_SUMMARY
-          echo "- 检测到上游更新" >> $GITHUB_STEP_SUMMARY
+          echo "- 检测到上游更新或强制构建" >> $GITHUB_STEP_SUMMARY
+          echo "- 本地 commit: \`${{ needs.check-and-sync.outputs.local_commit }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 上游 commit: \`${{ needs.check-and-sync.outputs.upstream_commit }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- 落后提交数: ${{ needs.check-and-sync.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
           echo "- 最新提交: ${{ needs.check-and-sync.outputs.commit_message }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -113,13 +160,12 @@ jobs:
           elif [ "${{ needs.build-all.result }}" == "failure" ]; then
             echo "## ❌ 构建状态" >> $GITHUB_STEP_SUMMARY
             echo "- ⚠️ 构建过程中出现错误" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build-all.result }}" == "skipped" ]; then
+            echo "## ⏭️ 构建状态" >> $GITHUB_STEP_SUMMARY
+            echo "- 构建被跳过" >> $GITHUB_STEP_SUMMARY
           fi
         else
           echo "## ℹ️ 无更新" >> $GITHUB_STEP_SUMMARY
           echo "- 您的仓库已是最新版本" >> $GITHUB_STEP_SUMMARY
           echo "- 下次检查时间: 明日同一时间" >> $GITHUB_STEP_SUMMARY
         fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "---" >> $GITHUB_STEP_SUMMARY
-        echo "**上游仓库**: https://github.com/${{ env.UPSTREAM_REPO }}" >> $GITHUB_STEP_SUMMARY
