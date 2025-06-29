@@ -1,0 +1,125 @@
+name: Daily Update and Build (Advanced)
+
+on:
+  schedule:
+    - cron: '0 16 * * *'  # UTC 16:00 = 北京时间 24:00
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: '强制构建（即使没有更新）'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  UPSTREAM_REPO: Adaptix-Framework/AdaptixC2
+  UPSTREAM_BRANCH: main
+
+jobs:
+  check-and-sync:
+    name: Check for updates and sync
+    runs-on: ubuntu-latest
+    outputs:
+      has_updates: ${{ steps.check_updates.outputs.has_updates }}
+      commit_message: ${{ steps.check_updates.outputs.commit_message }}
+      commits_behind: ${{ steps.check_updates.outputs.commits_behind }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Configure git
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+    
+    - name: Check for upstream updates
+      id: check_updates
+      run: |
+        # 添加上游仓库
+        git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git || true
+        git fetch upstream ${{ env.UPSTREAM_BRANCH }}
+        
+        # 获取当前和上游的 commit hash
+        LOCAL_COMMIT=$(git rev-parse HEAD)
+        UPSTREAM_COMMIT=$(git rev-parse upstream/${{ env.UPSTREAM_BRANCH }})
+        
+        # 计算落后的提交数
+        COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/${{ env.UPSTREAM_BRANCH }})
+        
+        echo "Local commit: $LOCAL_COMMIT"
+        echo "Upstream commit: $UPSTREAM_COMMIT"
+        echo "Commits behind: $COMMITS_BEHIND"
+        
+        if [ "$LOCAL_COMMIT" != "$UPSTREAM_COMMIT" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
+          echo "has_updates=true" >> $GITHUB_OUTPUT
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+          
+          # 获取最新的提交信息
+          COMMIT_MSG=$(git log upstream/${{ env.UPSTREAM_BRANCH }} -1 --pretty=format:"%s")
+          echo "commit_message=$COMMIT_MSG" >> $GITHUB_OUTPUT
+          
+          echo "### ✅ 检测到上游更新" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **落后提交数**: $COMMITS_BEHIND" >> $GITHUB_STEP_SUMMARY
+          echo "- **最新提交**: $COMMIT_MSG" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "has_updates=false" >> $GITHUB_OUTPUT
+          echo "commits_behind=0" >> $GITHUB_OUTPUT
+          echo "### ℹ️ 没有检测到新的更新" >> $GITHUB_STEP_SUMMARY
+        fi
+    
+    - name: Sync with upstream
+      if: steps.check_updates.outputs.has_updates == 'true' && github.event.inputs.force_build != 'true'
+      run: |
+        # 合并上游更改
+        git merge upstream/${{ env.UPSTREAM_BRANCH }} --no-edit
+        git push origin ${{ env.UPSTREAM_BRANCH }}
+
+  build-all:
+    name: Build all platforms
+    needs: check-and-sync
+    if: needs.check-and-sync.outputs.has_updates == 'true' || github.event.inputs.force_build == 'true'
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+
+  create-report:
+    name: Create daily report
+    needs: [check-and-sync, build-all]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Create detailed report
+      run: |
+        echo "# 📊 每日自动更新和构建报告" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**执行时间**: $(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.check-and-sync.outputs.has_updates }}" == "true" ]; then
+          echo "## ✅ 更新状态" >> $GITHUB_STEP_SUMMARY
+          echo "- 检测到上游更新" >> $GITHUB_STEP_SUMMARY
+          echo "- 落后提交数: ${{ needs.check-and-sync.outputs.commits_behind }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 最新提交: ${{ needs.check-and-sync.outputs.commit_message }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.build-all.result }}" == "success" ]; then
+            echo "## 🎉 构建状态" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ 所有平台构建成功" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.build-all.result }}" == "failure" ]; then
+            echo "## ❌ 构建状态" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚠️ 构建过程中出现错误" >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "## ℹ️ 无更新" >> $GITHUB_STEP_SUMMARY
+          echo "- 您的仓库已是最新版本" >> $GITHUB_STEP_SUMMARY
+          echo "- 下次检查时间: 明日同一时间" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "**上游仓库**: https://github.com/${{ env.UPSTREAM_REPO }}" >> $GITHUB_STEP_SUMMARY
