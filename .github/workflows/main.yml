@@ -38,7 +38,7 @@ jobs:
         working-directory: AdaptixServer
         env:
           GOEXPERIMENT: jsonv2,greenteagc
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
         run: |
           go build -buildvcs=false -ldflags="-s -w" -o adaptixserver .
 
