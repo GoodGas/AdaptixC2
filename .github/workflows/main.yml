@@ -42,6 +42,11 @@ jobs:
         run: |
           go build -buildvcs=false -ldflags="-s -w" -o adaptixserver .
 
+      - name: Sync Go workspace
+        working-directory: AdaptixServer
+        run: |
+          go work sync
+
       - name: Build all extenders
         working-directory: AdaptixServer/extenders
         env:
